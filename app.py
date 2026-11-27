@@ -1,6 +1,7 @@
 import streamlit as st
 import plotly.graph_objects as go
 from beam import calcular_viga
+from cargas import lineares
 from serviceability import deformacoes
 import numpy as np
 from eurocode5 import coeficientes, combinacoes, DURACOES, resistencia
@@ -13,9 +14,9 @@ st.markdown("""<style>
 </style>""",unsafe_allow_html=True)
 st.caption('Campos editáveis: fundo normal | Azul-claro: valores automáticos | Verde/vermelho: resultado | Amarelo: pendente')
 st.title('TimberDesign')
-st.warning('V1.0 Beta — acesso de teste. Auditoria parcial; não utilizar para decisões de projeto nem como declaração de conformidade regulamentar.')
+st.warning('V1.1 Beta — acesso de teste. Auditoria parcial; não utilizar para decisões de projeto nem como declaração de conformidade regulamentar.')
 st.subheader('Pré-dimensionamento de vigas de madeira')
-st.caption('V1.0 Beta — Resistência, deformações e vibrações EN 1995-1-1:2025')
+st.caption('V1.1 Beta — Resistência, deformações e vibrações EN 1995-1-1:2025')
 with st.sidebar:
     st.header('Dados de entrada')
     apoio=st.selectbox('Condições de apoio',['Simplesmente apoiada','Bi-encastrada','Consola'],help='Modelo idealizado: apoio simples permite rotação; encastramento impede rotação; consola tem uma extremidade livre.')
@@ -29,8 +30,16 @@ with st.sidebar:
     rho=st.number_input('Massa volúmica adotada (kg/m³)',100.,1500.,float(rho0),10.,key='rho_'+mat+str(override_rho),disabled=not override_rho,help='Massa por unidade de volume, usada no peso próprio e massa dinâmica.')
     if not override_rho: rho=rho0
     st.caption('Valor inicial indicativo; ajustar ao produto e teor de água.')
-    g=st.number_input('Permanentes adicionais (kN/m)',0.,100.,1.,0.1,help='Carga linear permanente adicional, sem peso próprio da viga.')
-    q=st.number_input('Variáveis (kN/m)',0.,100.,1.,0.1,help='Carga linear variável característica descendente.')
+    modo=st.radio('Tipo de carregamento',['Linear (kN/m)','Superficial (kN/m²)'],help='Carga superficial para vigas interiores de pavimentos unidirecionais com entre-eixos regular; carga linear para vigas isoladas ou largura tributária já considerada.')
+    area=modo.startswith('Superficial')
+    entre=st.number_input('Entre-eixos das vigas (mm)',50,3000,600,25,help='Distância entre eixos, igual à largura tributária de uma viga interior com espaçamento regular.')/1000 if area else None
+    unidade='kN/m²' if area else 'kN/m'
+    ge=st.number_input(f'Permanentes adicionais ({unidade})',0.,100.,1.,0.1,key='g_'+modo,help='Carga permanente característica, excluindo o peso próprio das vigas.')
+    qe=st.number_input(f'Variáveis ({unidade})',0.,100.,1.,0.1,key='q_'+modo,help='Sobrecarga característica descendente, antes de majoração.')
+    g,q=lineares(ge,qe,entre)
+    st.metric('Permanente linear sem viga (kN/m)',f'{g:.3f}')
+    st.metric('Variável linear (kN/m)',f'{q:.3f}')
+    if area and b/1000>=entre: st.error('Entre-eixos deve ser superior à largura da viga.'); st.stop()
     st.subheader('Parâmetros regulamentares')
     sc=st.selectbox('Classe de serviço',[1,2,3],help='Classe de serviço associada à exposição à humidade: 1 interior seco, 2 protegido com maior humidade, 3 condições mais húmidas. Confirmar EC5.')
     dur=st.selectbox('Duração da ação variável',DURACOES,index=2,help='Classe de duração da ação variável que determina kmod.')
@@ -184,12 +193,16 @@ if st.checkbox('Ativar análise de pavimento',help='Avalia o pavimento completo 
     with c1:
         lp=st.number_input('Vão do pavimento (m)',.5,30.,float(L),.1,help='Distância entre apoios rígidos do pavimento.')
         bp=st.number_input('Largura do pavimento (m)',.5,50.,4.,.1,help='Dimensão transversal da divisão considerada.')
-        gp=st.number_input('Permanentes totais (kN/m²)',.01,30.,1.5,.1,help='Inclui vigas, revestimentos, teto, elementos suspensos e divisórias. Não adicionar peso próprio novamente.')
-        qp=st.number_input('Sobrecarga característica (kN/m²)',0.,30.,2.,.1,help='Carga de utilização; 10% entra na massa dinâmica segundo 9.3.1.2.')
+        gp=ge+pp/entre if area else st.number_input('Permanentes totais (kN/m²)',.01,30.,1.5,.1,help='Inclui vigas, revestimentos, teto, elementos suspensos e divisórias. Não adicionar peso próprio novamente.')
+        qp=qe if area else st.number_input('Sobrecarga característica (kN/m²)',0.,30.,2.,.1,help='Carga de utilização; 10% entra na massa dinâmica segundo 9.3.1.2.')
+        if area:
+            st.metric('Permanentes totais (kN/m²)',f'{gp:.3f}')
+            st.metric('Sobrecarga (kN/m²)',f'{qp:.3f}')
         tipo=st.selectbox('Tipo de pavimento',['Vigado','Vigado com piso flutuante','Laje / nervurado / misto','Laje / nervurado / misto com piso flutuante'],help='Tipologia que determina amortecimento de referência e fator eta.')
         z=st.number_input('Amortecimento ζ (%)',.1,10.,[2.,3.,2.5,4.][['Vigado','Vigado com piso flutuante','Laje / nervurado / misto','Laje / nervurado / misto com piso flutuante'].index(tipo)],.1,key='z_'+tipo,help='Percentagem de amortecimento crítico; valores iniciais de 9.3.1.1.')/100
     with c2:
-        s=st.number_input('Espaçamento entre vigas (m)',.05,3.,.6,.05,help='Distância entre eixos; usada apenas para estimar EI longitudinal de vigas independentes.')
+        s=entre if area else st.number_input('Espaçamento entre vigas (m)',.05,3.,.6,.05,help='Distância entre eixos para estimar EI longitudinal.')
+        if area: st.metric('Entre-eixos adotado (m)',f'{s:.3f}')
         est=E*1e6*(b/1000)*(h/1000)**3/12/s/1e6
         st.caption(f'EI longitudinal por metro, só flexão das vigas: {est:.4f} MN·m²/m. Corrigir para corte, deslizamento e restantes camadas.')
         el=st.number_input('EI longitudinal aparente (MN·m²/m)',.00001,10000.,float(est),.01,format='%.5f',help='Rigidez efetiva por metro de largura incluindo corte e deslizamento; confirmar por análise independente (9.3.1.3).')*1e6
@@ -223,27 +236,33 @@ if st.checkbox('Ativar análise de pavimento',help='Avalia o pavimento completo 
 
 optimization_report=[]
 from optimization import pesquisar
-st.header('Pré-dimensionamento automático — V1.0 Beta')
+st.header('Pré-dimensionamento automático — V1.1 Beta')
 st.caption('Utiliza os parâmetros atuais da viga. A pesquisa não altera a secção manual nem verifica o pavimento completo.')
 with st.expander('Configurar pesquisa de secções',expanded=True):
     ls=st.text_input('Larguras candidatas (mm)','60, 80, 100, 120, 140, 160, 180, 200, 240',help='Lista separada por vírgulas. Confirmar disponibilidade comercial com o fornecedor.')
     hs=st.text_input('Alturas candidatas (mm)','120, 160, 200, 240, 280, 320, 360, 400, 440, 480, 520, 600',help='Lista de alturas de secções retangulares, separada por vírgulas.')
     preco=st.number_input('Preço indicativo (€/m³)',0.,10000.,0.,50.,help='Preço unitário da madeira, sem ligações, transporte ou montagem. Zero significa não estimar custo.')
     dinamica=st.checkbox('Incluir triagem dinâmica da viga isolada',help='Aplica os limites indicativos de frequência e flexibilidade da viga; não substitui a verificação do pavimento.')
-    ordem=st.selectbox('Ordenar por',['Volume (m³)','Utilização (%)','Custo estimado (€)'],help='Ordenação crescente das soluções que satisfazem os critérios calculados.')
+    esp=st.text_input('Entre-eixos candidatos (mm)',str(round(entre*1000)),help='Lista de afastamentos separados por vírgulas; verificar revestimento e travamentos para cada opção.') if area else ''
+    ordem=st.selectbox('Ordenar por',(['Madeira (m³/m²)','Utilização (%)','Custo madeira (€/m²)'] if area else ['Volume (m³)','Utilização (%)','Custo estimado (€)']),help='Ordenação crescente das soluções que satisfazem os critérios calculados.')
     if st.checkbox('Executar pesquisa',help='Ativa a pesquisa e recalcula quando os parâmetros são alterados.'):
         try:
             larguras=sorted(set(int(x.strip()) for x in ls.split(','))); alturas=sorted(set(int(x.strip()) for x in hs.split(',')))
             if not all(20<=x<=1000 for x in larguras) or not all(40<=x<=2000 for x in alturas) or len(larguras)*len(alturas)>2500: raise ValueError('Dimensões fora dos limites ou mais de 2500 combinações.')
-            rows=pesquisar(larguras,alturas,L=L,E=E,G=G,rho=rho,g=g,q=q,apoio=apoio,psi=psi,mat=mat,fm=fm,fv=fv,kp=kp,km=km,gm=gm,kvar=kvar,gg=gg,gq=gq,kd=kd,psi1=psi1,psi2=psi2,w0=w0,limite=limite,nfin=nfin,nfreq=nfreq,travada=travada,flim=flim,alim=alim,dinamica=dinamica,preco=preco)
+            espacamentos=sorted(set(int(x.strip())/1000 for x in esp.split(','))) if area else [None]
+            if area and (not all(.05<=x<=3 for x in espacamentos) or len(larguras)*len(alturas)*len(espacamentos)>2500): raise ValueError('Afastamentos inválidos ou mais de 2500 combinações.')
+            rows=pesquisar(larguras,alturas,L=L,E=E,G=G,rho=rho,g=g,q=q,apoio=apoio,psi=psi,mat=mat,fm=fm,fv=fv,kp=kp,km=km,gm=gm,kvar=kvar,gg=gg,gq=gq,kd=kd,psi1=psi1,psi2=psi2,w0=w0,limite=limite,nfin=nfin,nfreq=nfreq,travada=travada,flim=flim,alim=alim,dinamica=dinamica,preco=preco,espacamentos=espacamentos,g_area=ge if area else None,q_area=qe if area else None)
             import pandas as pd
-            df=pd.DataFrame(rows); ok=df[df['Utilização (%)']<=100].sort_values([ordem,'Volume (m³)'] if ordem!='Volume (m³)' else [ordem,'Utilização (%)'])
+            if not rows: raise ValueError('Nenhuma geometria válida: verificar larguras e afastamentos.')
+            df=pd.DataFrame(rows); ok=df[df['Utilização (%)']<=100].sort_values([ordem,('Madeira (m³/m²)' if area else 'Volume (m³)')] if ordem not in ('Volume (m³)','Madeira (m³/m²)') else [ordem,'Utilização (%)'])
             optimization_report=[('Pesquisa',f'{len(ok)} / {len(df)} candidatas dentro dos critérios'),('Ordenação',ordem),('Travamento confirmado',str(travada)),('Triagem dinâmica',str(dinamica)),('Larguras / alturas (mm)',f'{ls} / {hs}')]+[(f"{int(t['b (mm)'])} x {int(t['h (mm)'])} mm",f"Utilização {t['Utilização (%)']:.2f}% | Volume {t['Volume (m³)']:.4f} m³") for _,t in ok.head(10).iterrows()]
+            if area: optimization_report.extend([('Entre-eixos candidatos (mm)',esp)]+[(f"{int(t['b (mm)'])} x {int(t['h (mm)'])} @ {int(t['Entre-eixos (mm)'])} mm",f"{t['Madeira (m³/m²)']:.5f} m³/m² | {t['Custo madeira (€/m²)']:.2f} €/m²") for _,t in ok.head(10).iterrows()])
             if not travada: st.warning('Estabilidade lateral não avaliada na pesquisa: o momento crítico externo da secção manual não é transferível. Resultados apenas parciais.')
             st.metric('Candidatas dentro dos critérios calculados',f'{len(ok)} / {len(df)}')
             if ok.empty: st.error('Nenhuma candidata satisfaz os critérios calculados.')
             else:
                 best=ok.iloc[0]; st.metric('Primeira candidata (mm)',f"{int(best['b (mm)'])} × {int(best['h (mm)'])}")
+                if area: st.metric('Entre-eixos da primeira candidata (mm)',f"{best['Entre-eixos (mm)']:.0f}")
                 st.caption('Para verificar em detalhe, introduzir estas dimensões nos campos manuais da barra lateral.')
                 st.dataframe(ok.style.format({'Volume (m³)':'{:.4f}','Utilização (%)':'{:.2f}','Custo estimado (€)':'{:.2f}','f1 (Hz)':'{:.2f}'}).set_properties(**{'background-color':'#e0edfa','color':'#24578d'}),hide_index=True)
             with st.expander('Todas as candidatas'):
@@ -259,6 +278,7 @@ cliente=st.text_input('Cliente',help='Entidade destinatária do estudo.')
 engenheiro=st.text_input('Engenheiro',help='Responsável pela revisão técnica; não constitui assinatura.')
 elemento=st.text_input('Referência do elemento',help='Identificador da viga ou pavimento.')
 secoes=[('Modelo e dados de entrada',[( 'Apoio',apoio),('Vão (m)',L),('Secção (mm)',f'{b} x {h}'),('Material',mat),('E / G (MPa)',f'{E} / {G}'),('Massa volúmica (kg/m³)',rho),('fm,k / fv,k (MPa)',f'{fm} / {fv}'),('G adicional / Q (kN/m)',f'{g} / {q}'),('Peso próprio (kN/m)',f'{pp:.4f}'),('Classe de serviço / duração',f'{sc} / {dur}'),('kmod G / G+Q; kdef',f'{kp} / {km}; {kd}'),('γM / γG / γQ',f'{gm} / {gg} / {gq}'),('ψ1 / ψ2',f'{psi1} / {psi2}'),('kvar',kvar),('Travamento confirmado',str(travada)),('Mcr / βm / βθ externos',f'{mcr} / {beta_m} / {beta_theta}'),('Contraflecha (mm)',w0),('A / I / W (mm² / mm⁴ / mm³)',f"{r['A']:.0f} / {r['I']:.0f} / {r['W']:.0f}")])]
+secoes.append(('Origem das ações',[('Modo',modo),('Entre-eixos (m)',entre),('G / Q introduzidos ('+unidade+')',f'{ge} / {qe}'),('G / Q lineares sem peso próprio (kN/m)',f'{g:.4f} / {q:.4f}')]))
 secoes.append(('Combinações de ações — parâmetros provisórios',[(n,f'{c:.3f} kN/m') for n,c in combinacoes(pp+g,q,gg,gq,psi1,psi2).items()]))
 for nome,a in checks:
     secoes.append((nome,[(k,'Não avaliada' if a[k] is None else f'{100*a[k]:.2f}%') for k in ('flexao','corte','instabilidade')]+[(k,f'{a[k]:.4f}') for k in ('khm','khv','kv','fmd','fvd')]))

@@ -1,4 +1,4 @@
-# TimberDesign V1.0 Beta
+# TimberDesign V1.1 Beta
 
 Protótipo de pré-dimensionamento. Não validado para decisões de projeto. A publicação não certifica a conformidade com EN 1995-1-1:2025. Consultar AUDITORIA.txt.
 
@@ -11,3 +11,5 @@ Criar repositório privado no GitHub, carregar os ficheiros deste pacote (não c
 ## Testes
 `python -m unittest -v test_regressao`.
 As dependências têm intervalos de versões, não um ambiente integralmente reproduzível. Testar a instalação e interface no alojamento antes de convidar utilizadores.
+
+V1.1: cargas superficiais para vigas interiores regulares; peso próprio separado. Pesquisa de secções e entre-eixos por consumo de madeira por área. A pesquisa não verifica revestimentos nem vibração global do pavimento. No módulo de pavimento, as cargas e entre-eixos são partilhados em modo superficial; EI aparente continua a exigir confirmação manual.
